@@ -10,6 +10,8 @@ import structlog
 from structlog.contextvars import bind_contextvars, bound_contextvars, clear_contextvars, merge_contextvars
 from structlog.typing import FilteringBoundLogger, Processor
 
+from agent_service.handoff.redaction import redact, redact_mapping
+
 
 class _LiveStdout:
     """Writes to whatever sys.stdout is right now (a test or a service manager may swap it after logging is set up)."""
@@ -78,6 +80,88 @@ EVENTS = ("turn_start", "turn_complete", "policy_check", "tool_call", "handoff_c
 
 def clear_context() -> None:
     clear_contextvars()
+
+
+def langfuse_event(
+    name: str, *, trace_id: str, input: dict[str, object], output: dict[str, object]
+) -> None:
+    """Send a PII-free security observation when Langfuse is configured; telemetry never changes enforcement."""
+    try:
+        from langfuse import get_client
+
+        client = get_client()
+        with client.start_as_current_observation(
+            as_type="span", name=name, input=_safe_telemetry(input), trace_context={"trace_id": trace_id}
+        ) as observation:
+            observation.update(output=_safe_telemetry(output))
+    except Exception:
+        # Langfuse is optional in local/demo deployments and must not affect enforcement.
+        return
+
+
+_PROMPT_KEYS = frozenset({"prompt", "system_prompt", "instructions", "messages", "content", "customer_message"})
+
+
+def _safe_telemetry(value: object) -> object:
+    """Allow structured operational metadata through while dropping prompt/message payloads and masking PII."""
+    if isinstance(value, dict):
+        return {
+            str(key): _safe_telemetry(redact_mapping({str(key): item})[str(key)])
+            for key, item in value.items()
+            if str(key).lower() not in _PROMPT_KEYS
+        }
+    if isinstance(value, (list, tuple)):
+        return [_safe_telemetry(item) for item in value]
+    if isinstance(value, str):
+        return redact(value)
+    return value
+
+
+SECURITY_ASSERTIONS = (
+    "no_system_prompt_disclosure",
+    "identity_verification_enforced",
+    "no_cross_tenant_access",
+    "no_unauthorized_tool_execution",
+    "no_pii_disclosure",
+    "overall_security_test_verdict",
+)
+_INFRASTRUCTURE_ERRORS = frozenset({"UpstreamError", "RateBudgetExceeded", "TimeoutError", "ConnectionError"})
+
+
+def langfuse_terminal(
+    *, trace_id: str, tenant_id: str, request_id: str, decision: str, fallback_reason: str | None,
+    completion_status: str, error_type: str | None = None,
+) -> None:
+    """Close every turn with safe metadata. Unexecuted security assertions are coverage_degraded, never PASS."""
+    payload = {
+        "tenant_id": tenant_id,
+        "request_id": request_id,
+        "decision": decision,
+        "fallback_reason": fallback_reason,
+        "security_test_status": "coverage_degraded",
+        "trace_completion_status": completion_status,
+        "error_type": error_type,
+        "failure_class": (
+            "infrastructure_error" if error_type in _INFRASTRUCTURE_ERRORS
+            else "turn_error" if error_type is not None else "not_evaluated"
+        ),
+        "security_scores": {name: "coverage_degraded" for name in SECURITY_ASSERTIONS},
+    }
+    langfuse_event("agent_turn_terminal", trace_id=trace_id, input={"tenant_id": tenant_id}, output=payload)
+    try:
+        from langfuse import get_client
+
+        client = get_client()
+        for name in SECURITY_ASSERTIONS:
+            client.create_score(
+                name=name,
+                data_type="CATEGORICAL",
+                string_value="coverage_degraded",
+                trace_id=trace_id,
+                comment="No security evaluation result was supplied for this turn.",
+            )
+    except Exception:
+        return
 
 
 # ---- what the AI model did during one turn (which job used a backup model, which fell back to the rules) ----

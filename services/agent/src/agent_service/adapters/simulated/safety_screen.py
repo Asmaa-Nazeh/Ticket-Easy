@@ -1,6 +1,6 @@
 """Simulated for the knowledge service safety screen: topics that must always go to a human.
 
-Keyword and phrase matching over fixtures/<tenant>/risk.json, per category and per style (en, ar, arabizi).
+Business-risk keyword matching over fixtures/<tenant>/risk.json plus a tenant-independent instruction-attack screen.
 Text and terms are normalized (spelling variants, diacritics, digits) and matched as whole words or phrases; an
 Arabic term also matches with the attached article or small words (al-, wa-, bi-, li-, lil-). A second pass
 collapses stretched letters ("scaaam"), joins letters spread out with spaces or dots ("s c a m") and reads
@@ -20,6 +20,7 @@ from typing import Any
 
 from agent_service.contracts.errors import UpstreamError
 from agent_service.contracts.evidence import RiskAssessment
+from agent_service.understanding.injection import looks_like_attack
 from agent_service.understanding.text import normalize
 
 SERVICE = "safety_screen"
@@ -123,6 +124,15 @@ class SimulatedSafetyScreen:
     ) -> RiskAssessment:
         self._maybe_fail()
         text = normalize(message)
+        # Prompt attacks are platform risks, not tenant business-risk keywords. Keep this independent of
+        # fixture configuration so every tenant receives the same mandatory pre-action protection.
+        if looks_like_attack(message):
+            return RiskAssessment(
+                flagged=True,
+                categories=("suspected_attack",),
+                matched_terms=("instruction_hierarchy_or_extraction_attempt",),
+                method="security_patterns",
+            )
         collapsed = _collapse(text)
         variants = _variants(text)
         categories: list[str] = []

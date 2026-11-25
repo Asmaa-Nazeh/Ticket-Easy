@@ -20,6 +20,8 @@ class EscalationReason(StrEnum):
 
     CUSTOMER_REQUEST = "customer_request"
     MANDATORY_RISK = "mandatory_risk"
+    SUSPECTED_ATTACK = "suspected_attack"
+    UNRECOGNISED_INTENT = "unrecognised_intent"
     POLICY_DENIED = "policy_denied"
     APPROVAL_REQUIRED = "approval_required"
     REPEATED_TOOL_FAILURE = "repeated_tool_failure"

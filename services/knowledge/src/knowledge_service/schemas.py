@@ -256,6 +256,7 @@ RiskCategory = Literal[
     "medical_safety",
     "compensation_demand",
     "identity_concern",
+    "suspected_attack",
 ]
 MANDATORY_ESCALATION: frozenset[str] = frozenset(RiskCategory.__args__)
 

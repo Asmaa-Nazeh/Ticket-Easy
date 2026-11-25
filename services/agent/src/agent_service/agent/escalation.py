@@ -38,6 +38,7 @@ R = EscalationReason
 FORCED_ONLY = frozenset(
     {
         R.MANDATORY_RISK,
+        R.SUSPECTED_ATTACK,
         R.OWNERSHIP_MISMATCH,
         R.IDENTITY_FAILED,
         R.APPROVAL_REQUIRED,
@@ -47,7 +48,10 @@ FORCED_ONLY = frozenset(
 )
 # reasons the planner may choose only after trying (see the module text)
 TRIED_FIRST = frozenset(
-    {R.HIGH_FRUSTRATION, R.NO_EVIDENCE, R.DEPENDENCY_UNAVAILABLE, R.REPEATED_TOOL_FAILURE, R.LOW_CONFIDENCE}
+    {
+        R.HIGH_FRUSTRATION, R.NO_EVIDENCE, R.DEPENDENCY_UNAVAILABLE, R.REPEATED_TOOL_FAILURE,
+        R.LOW_CONFIDENCE, R.UNRECOGNISED_INTENT,
+    }
 )
 MAX_TRIED_ITEMS = 12
 SHORT = 140
@@ -100,7 +104,7 @@ def handover_problem(ctx: TurnContext, move: HandOver) -> str | None:
     elif reason in (R.DEPENDENCY_UNAVAILABLE, R.REPEATED_TOOL_FAILURE):
         if _outage_attempts(ctx) <= cfg.outage_retries:
             return "retry once before handing over because of an outage"
-    elif reason is R.LOW_CONFIDENCE and session.agent_questions < cfg.max_clarifications:
+    elif reason in (R.LOW_CONFIDENCE, R.UNRECOGNISED_INTENT) and session.agent_questions < cfg.max_clarifications:
         return f"ask the customer {cfg.max_clarifications} question(s) about the request before handing over"
     return None
 

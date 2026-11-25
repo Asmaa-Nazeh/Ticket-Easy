@@ -57,6 +57,29 @@ def risk_canonical(text: str) -> str:
     return " ".join(_canonical_token(t) for t in tokens)
 
 
+# Security instructions target the assistant itself, rather than describing a customer's business issue.
+# Contextual phrases avoid blocking ordinary requests that merely mention refunds, policies, or tools.
+_ATTACK_PATTERNS = tuple(re.compile(p) for p in (
+    r"\b(?:ignore|disregard|forget|override|bypass|skip|disable)\b.{0,50}\b(?:rules?|instructions?|policy|policies|guardrails?|verification|identity|ownership)\b",
+    r"\b(?:you are now|act as|pretend to be|switch to)\s+(?:dan|developer|administrator|admin|system|unrestricted|unfiltered)\b",
+    r"\b(?:enta|inta)\s+(?:(?:delwa2ty|el)\s+)?(?:dan|admin|modir el nezam|system|developer)\b",
+    r"\b(?:this is|i am)\s+(?:the\s+)?(?:system administrator|administrator|admin|developer)\b",
+    r"\b(?:reveal|show|print|repeat|dump|leak|extract|translate|summari[sz]e)\b.{0,50}\b(?:system|developer|hidden|initial)\s+(?:prompt|instructions?|message)\b",
+    r"\b(?:quote|repeat|print|show|tell me|give me|translate|encode)\b.{0,50}\b(?:everything|all|previous|prior|hidden|initial|system|developer)\b.{0,25}\b(?:above|prompt|instructions?|messages?|text)\b",
+    r"\b(?:list|expose|describe|dump|extract)\b.{0,40}\b(?:mcp|tools?|functions?|connectors?|credentials?|secrets?|api keys?)\b",
+    r"\b(?:what|which|name|enumerate|describe|tell me)\b.{0,35}\b(?:tools?|functions?|mcp)\b.{0,35}\b(?:you have access to|you can call|available to you|your)\b",
+    r"\b(?:for the next|from now on)\b.{0,40}\b(?:ignore|forget|override|bypass|disable)\b",
+    r"\b3adi\s+(?:el verification|el identity)\b.{0,45}\b(?:w|we)\s+(?:show|open|raga3|rga3|refund|eb3at|wariny)\b",
+    r"\b(?:wariny|warini|e3red|etla3|ektb)\b.{0,45}\b(?:system prompt|instructions|tools?|mcp|secrets?)\b",
+    r"(?:اكشف|اظهر|اطبع|كرر|استخرج).{0,45}(?:تعليمات النظام|البرومبت|التعليمات المخفية|الأدوات|mcp)",
+    r"(?:تجاوز|عطل|الغ|تخطى).{0,40}(?:التحقق|تأكيد الهوية|ملكية الحساب|السياسة|القواعد)",
+))
+
+
+def _attack_detected(message: str) -> bool:
+    return any(pattern.search(normalize(message)) for pattern in _ATTACK_PATTERNS)
+
+
 # A term matches as a whole word or phrase, never inside a longer word ("rash" is not in "crashed",
 # "court" is not in "courtesy"). What may still be attached is small and explicit:
 #   - Arabic: one article/particle in front (ال, و, ب, ل, ف, وال, بال, لل ...) and a possessive, plural
@@ -123,6 +146,9 @@ def keyword_scan(message: str) -> tuple[set[str], list[str]]:
             if pattern.search(text):
                 categories.add(category)
                 matched.append(term)
+    if _attack_detected(message):
+        categories.add("suspected_attack")
+        matched.append("instruction_hierarchy_or_extraction_attempt")
     return categories, matched
 
 

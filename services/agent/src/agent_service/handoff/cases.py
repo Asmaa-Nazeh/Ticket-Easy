@@ -44,6 +44,8 @@ R = EscalationReason
 # reason -> default priority. The shop can change any of them in its tenant file (escalation.priorities).
 DEFAULT_PRIORITY: dict[EscalationReason, Priority] = {
     R.MANDATORY_RISK: "urgent",
+    R.SUSPECTED_ATTACK: "urgent",
+    R.UNRECOGNISED_INTENT: "normal",
     R.REPEATED_TOOL_FAILURE: "high",
     R.UNVERIFIED_RESULT: "high",
     R.DEPENDENCY_UNAVAILABLE: "high",
@@ -60,6 +62,14 @@ DEFAULT_PRIORITY: dict[EscalationReason, Priority] = {
 }
 # reason -> what a human should do first, in English (en) and Egyptian Arabic (ar). Also tunable per shop.
 NEXT_STEP: dict[EscalationReason, dict[str, str]] = {
+    R.SUSPECTED_ATTACK: {
+        "en": "Review the suspicious instruction or data extraction attempt; keep the assistant blocked.",
+        "ar": "راجع محاولة التعليمات أو استخراج البيانات المشبوهة، وخلي المساعد متوقف.",
+    },
+    R.UNRECOGNISED_INTENT: {
+        "en": "Ask the customer to describe what they need in a different way.",
+        "ar": "اطلب من العميل يوضح محتاج إيه بطريقة تانية.",
+    },
     R.CUSTOMER_REQUEST: {
         "en": "Greet the customer and ask how you can help.",
         "ar": "رحّب بالعميل واسأله تقدر تساعده في إيه.",

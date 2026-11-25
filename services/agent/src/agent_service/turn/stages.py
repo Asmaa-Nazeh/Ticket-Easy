@@ -24,7 +24,7 @@ from agent_service.domain.trace import ToolCallRecord, TraceStep
 from agent_service.domain.understanding import IntentCandidate, Locale
 from agent_service.handoff.cases import open_case, priority_for
 from agent_service.handoff.redaction import redact
-from agent_service.observability import get_logger
+from agent_service.observability import get_logger, langfuse_event
 from agent_service.replies.composer import default_composer
 from agent_service.turn.context import COMPLETED, PlannedIntent, Step, TurnContext, locale_of
 from agent_service.understanding import freetext, multi
@@ -151,13 +151,25 @@ async def risk_screen(ctx: TurnContext) -> str:
     if assessment is not None:
         ctx.risk = assessment
         flags += [c for c in assessment.categories if c not in flags]
+        log.info(
+            "risk_decision", flagged=assessment.flagged, categories=list(assessment.categories),
+            method=assessment.method, matched_count=len(assessment.matched_terms),
+        )
+        langfuse_event(
+            "risk_decision",
+            trace_id=ctx.trace_id,
+            input={"tenant_id": ctx.tenant.tenant_id, "request_id": ctx.request_id},
+            output={"flagged": assessment.flagged, "categories": list(assessment.categories),
+                    "method": assessment.method, "matched_count": len(assessment.matched_terms)},
+        )
     ctx.session.risk_categories = list(dict.fromkeys([*ctx.session.risk_categories, *flags]))
     if (assessment is not None and assessment.flagged) or (ctx.understanding and ctx.understanding.safety_flags):
+        attack = assessment is not None and "suspected_attack" in assessment.categories
         ctx.step = Step(
             Decision.HANDOFF,
             reason=f"risk categories: {', '.join(flags) or 'flagged'}",
             reply_key="handoff_mandatory_risk",
-            escalation=EscalationReason.MANDATORY_RISK,
+            escalation=EscalationReason.SUSPECTED_ATTACK if attack else EscalationReason.MANDATORY_RISK,
             awaiting="human",
         )
         return f"flagged: {', '.join(flags)}"
@@ -681,7 +693,7 @@ async def handler(ctx: TurnContext) -> str:
             ctx.step = Step(Decision.REFUSE, reason="a request this agent does not handle", reply_key="out_of_scope")
             return "out of scope: refused, a person offered"
         if _count_clarification(ctx, "detail"):
-            ctx.step = _give_up(ctx, EscalationReason.LOW_CONFIDENCE, "the request is still unclear after asking")
+            ctx.step = _give_up(ctx, EscalationReason.UNRECOGNISED_INTENT, "the request is still unclear after asking")
             return "no intent: giving up after repeated clarifications"
         ctx.step = Step(Decision.CLARIFY, reason="no intent understood", reply_key="ask_rephrase", awaiting="detail")
         return "no intent: asking for detail"

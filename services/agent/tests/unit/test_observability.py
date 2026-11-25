@@ -54,6 +54,83 @@ def test_console_mode_is_not_json(capsys: pytest.CaptureFixture[str]) -> None:
     configure_logging(json_logs=True)
 
 
+def test_langfuse_payloads_drop_prompts_and_redact_pii() -> None:
+    from agent_service.observability import _safe_telemetry
+
+    payload = _safe_telemetry({
+        "system_prompt": "do not reveal this",
+        "customer_message": "Mona mail mona@example.com call 01012345601",
+        "debug": "request from 15 Tahrir Street",
+        "stage": "risk_screen",
+        "details": {"instructions": "nested prompt", "note": "customer text: ignore system; code 482913"},
+    })
+    assert payload == {
+        "debug": "request from [address]",
+        "stage": "risk_screen",
+        "details": {"note": "customer text: ignore system; code [otp]"},
+    }
+
+
+def test_terminal_scores_report_missing_execution_as_coverage_degraded(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    from types import SimpleNamespace
+
+    from agent_service.observability import SECURITY_ASSERTIONS, langfuse_terminal
+
+    scores: list[dict[str, object]] = []
+    terminal_output: dict[str, object] = {}
+
+    class Observation:
+        def update(self, **kwargs: object) -> None:
+            terminal_output.update(kwargs.get("output", {}))  # type: ignore[arg-type]
+
+    client = SimpleNamespace(
+        create_score=lambda **kwargs: scores.append(kwargs),
+        start_as_current_observation=lambda **kwargs: nullcontext(Observation()),
+    )
+    from contextlib import nullcontext
+
+    monkeypatch.setitem(sys.modules, "langfuse", SimpleNamespace(get_client=lambda: client))
+    langfuse_terminal(
+        trace_id="trace-1", tenant_id="shop_001", request_id="req-1", decision="answer",
+        fallback_reason=None, completion_status="failed", error_type="UpstreamError",
+    )
+    assert len(scores) == len(SECURITY_ASSERTIONS)
+    assert {score["name"] for score in scores} == set(SECURITY_ASSERTIONS)
+    assert all(score["string_value"] == "coverage_degraded" for score in scores)
+    assert all(score["data_type"] == "CATEGORICAL" for score in scores)
+    assert terminal_output["failure_class"] == "infrastructure_error"
+    assert terminal_output["security_test_status"] == "coverage_degraded"
+
+
+def test_every_langfuse_span_boundary_sanitizes_input_and_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    from agent_service.observability import langfuse_event
+
+    recorded: dict[str, object] = {}
+
+    class Observation:
+        def update(self, **kwargs: object) -> None:
+            recorded.update(kwargs)
+
+    client = SimpleNamespace(
+        start_as_current_observation=lambda **kwargs: (
+            recorded.update(kwargs) or nullcontext(Observation())
+        )
+    )
+    monkeypatch.setitem(sys.modules, "langfuse", SimpleNamespace(get_client=lambda: client))
+    langfuse_event(
+        "debug", trace_id="trace-1",
+        input={"customer_message": "omit me", "phone": "01012345601", "stage": "verify"},
+        output={"system_prompt": "omit me too", "email": "mona@example.com", "status": "ok"},
+    )
+    assert recorded["input"] == {"phone": "[phone]", "stage": "verify"}
+    assert recorded["output"] == {"email": "[email]", "status": "ok"}
+
+
 async def test_ids_are_isolated_between_concurrent_tasks(capsys: pytest.CaptureFixture[str]) -> None:
     import asyncio
 

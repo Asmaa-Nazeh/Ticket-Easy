@@ -25,7 +25,7 @@ from agent_service.domain.tenant import TenantConfig
 from agent_service.domain.trace import DecisionTrace, ProposalRecord, TraceStep, record_problems
 from agent_service.domain.understanding import Language, Locale, NLUResult
 from agent_service.handoff.redaction import redact, redact_mapping, redact_value
-from agent_service.observability import ai_events, get_logger, turn_context
+from agent_service.observability import ai_events, get_logger, langfuse_event, langfuse_terminal, turn_context
 from agent_service.replies.composer import default_composer
 from agent_service.replies.rewrite import REWRITABLE
 from agent_service.replies.writer import WRITABLE, plan_of
@@ -316,11 +316,25 @@ def log_turn_events(ctx: TurnContext, trace: DecisionTrace) -> None:
             "policy_check", action=entry.action, decision=entry.decision, reason_code=entry.reason_code,
             policy_request_id=entry.request_id,
         )  # fmt: skip
+        langfuse_event(
+            "policy_gate_decision",
+            trace_id=trace.trace_id,
+            input={"tenant_id": trace.tenant_id, "request_id": entry.request_id, "action": entry.action},
+            output={"decision": entry.decision, "reason_code": entry.reason_code},
+        )
     for call in trace.tool_calls:
         log.info(
             "tool_call", tool=call.tool, operation_kind=call.operation_kind, status=call.status,
             error_code=call.error_code, audit_id=call.audit_id, latency_ms=round(call.latency_ms, 1),
         )  # fmt: skip
+        langfuse_event(
+            "mcp_tool_call",
+            trace_id=trace.trace_id,
+            input={"tenant_id": trace.tenant_id, "tool": call.tool,
+                   "operation_kind": call.operation_kind, "audit_id": call.audit_id},
+            output={"status": call.status, "error_code": call.error_code,
+                    "latency_ms": round(call.latency_ms, 1)},
+        )
     log.info(
         "turn_complete", decision=trace.decision.value,
         escalation_reason=trace.escalation_reason.value if trace.escalation_reason else None,
@@ -395,12 +409,17 @@ async def finish(ctx: TurnContext) -> AgentReply:
         errors=tuple(redact(e) for e in ctx.errors),
         agent_mode=ctx.agent_mode,
         agent_plan=redacted_plan(session.agent_plan),
-        agent_steps=tuple(ctx.agent_steps),
+        agent_steps=tuple(
+            type(record).model_validate(redact_mapping(record.model_dump(mode="python"))) for record in ctx.agent_steps
+        ),
         fallback_reason=redact(ctx.fallback_reason) if ctx.fallback_reason else None,
-        shadow_plan=ctx.shadow_plan,
-        shadow_move=ctx.shadow_move,
-        shadow_error=ctx.shadow_error,
-        steps=tuple(ctx.steps),
+        shadow_plan=redacted_plan(ctx.shadow_plan),
+        shadow_move=(
+            type(ctx.shadow_move).model_validate(redact_mapping(ctx.shadow_move.model_dump(mode="python")))
+            if ctx.shadow_move is not None else None
+        ),
+        shadow_error=redact(ctx.shadow_error) if ctx.shadow_error else None,
+        steps=tuple(step.model_copy(update={"detail": redact(step.detail)}) for step in ctx.steps),
         latency_ms=(time.perf_counter() - ctx.started) * 1000,
     )
     problems = record_problems(trace)
@@ -481,19 +500,36 @@ async def run_turn(
             trace_id=ctx.trace_id,
         ):
             log.info("turn_start", turn_index=ctx.session.turn_index, channel=channel, message_chars=len(text))
-            with ai_events() as events:
-                ctx.ai_events = events
-                flow = agent_flow(ctx)
-                if flow == "agent":
-                    for stage in FRONT_STAGES:
-                        await run_stage(ctx, stage)
-                    resume_plan_after_confirmation(ctx)
-                    await run_stage(ctx, AGENT_STAGE)
-                    if ctx.fallback_reason is not None and ctx.step is None:  # the loop gave up: the usual middle
-                        for stage in MIDDLE_STAGES:
+            completion_status, error_type = "failed", None
+            try:
+                with ai_events() as events:
+                    ctx.ai_events = events
+                    flow = agent_flow(ctx)
+                    if flow == "agent":
+                        for stage in FRONT_STAGES:
                             await run_stage(ctx, stage)
-                    await run_stage(ctx, HANDOFF_STAGE)
-                else:
-                    for stage in SHADOW_STAGES if flow == "shadow" else STAGES:
-                        await run_stage(ctx, stage)
-                return await finish(ctx)
+                        resume_plan_after_confirmation(ctx)
+                        await run_stage(ctx, AGENT_STAGE)
+                        if ctx.fallback_reason is not None and ctx.step is None:
+                            for stage in MIDDLE_STAGES:
+                                await run_stage(ctx, stage)
+                        await run_stage(ctx, HANDOFF_STAGE)
+                    else:
+                        for stage in SHADOW_STAGES if flow == "shadow" else STAGES:
+                            await run_stage(ctx, stage)
+                    reply = await finish(ctx)
+                    completion_status = "complete"
+                    return reply
+            except BaseException as exc:
+                error_type = type(exc).__name__
+                raise
+            finally:
+                langfuse_terminal(
+                    trace_id=ctx.trace_id,
+                    tenant_id=tenant.tenant_id,
+                    request_id=ctx.request_id,
+                    decision=ctx.step.decision.value if ctx.step is not None else "undetermined",
+                    fallback_reason=ctx.fallback_reason,
+                    completion_status=completion_status,
+                    error_type=error_type,
+                )

@@ -72,6 +72,8 @@
       "en": [
         "where is my order", "wheres my order", "where's my order", "where is my package", "where is my parcel",
         "where is it", "track my order", "track order", "tracking", "order status", "status of my order",
+        "what is happening with my order", "what happened to my order", "any update on my order", "update on order",
+        "check my order", "check order", "my order hasn't come", "my order has not come",
         "delivery status", "when will my order arrive", "when will it arrive", "when is my order coming",
         "has my order shipped", "hasn't arrived", "hasnt arrived", "has not arrived", "did not arrive", "didnt arrive",
         "not arrived", "still waiting for my order"
@@ -131,7 +133,7 @@
     "refund_request": {
       "en": [
         "refund", "money back", "get my money back", "want my money back", "reimburse", "reimbursement",
-        "give me my money"
+        "give me my money", "i would like a refund", "i need a refund", "please refund me", "refund my payment"
       ],
       "ar": [
         "استرداد", "رد المبلغ", "رد فلوس", "رد الفلوس", "ارجع فلوسي", "رجعوا فلوسي", "رجعولي فلوسي", "ردوا فلوسي",
